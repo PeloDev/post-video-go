@@ -2,15 +2,25 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 
 	"github.com/gabriel-vasile/mimetype"
+	"github.com/go-redis/redis/v8"
 )
 
 // TODO: refactor into coherent folder/file structure
+
+// PubSub with Redis: https://dev.to/franciscomendes10866/using-redis-pub-sub-with-golang-mf9
+// Currently using local redis-server. For a prod setup will need to install on server and probably use an init script:
+// -> https://redis.io/docs/getting-started/#installing-redis-more-properly
+var ctx = context.Background()
+var redisClient = redis.NewClient(&redis.Options{
+	Addr: "localhost:6379",
+})
 
 type ResponseOkay struct {
 	Success bool `json:"success"`
@@ -57,9 +67,14 @@ func upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Send to queue if valid
+	// Publish video
+	pubRes := redisClient.Publish(ctx, "valid-upload", buf.Bytes())
+	if pubRes.Err() != nil {
+		fmt.Println("err:", pubRes.Err())
+		http.Error(w, "Sorry, we had some trouble processing your video. Please try again", http.StatusInternalServerError)
+	}
 
-	// Send response for now...
+	// Send response to client
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(ResponseOkay{Success: true})
 }
