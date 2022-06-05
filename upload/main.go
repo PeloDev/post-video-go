@@ -68,7 +68,8 @@ func upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Publish video
-	pubRes := redisClient.Publish(ctx, "valid-upload", buf.Bytes())
+	fmt.Println("fileLength:", len(buf.Bytes()))
+	pubRes := redisClient.Publish(ctx, "valid-upload", buf.String())
 	if pubRes.Err() != nil {
 		fmt.Println("err:", pubRes.Err())
 		http.Error(w, "Sorry, we had some trouble processing your video. Please try again", http.StatusInternalServerError)
