@@ -20,6 +20,47 @@ var redisClient = redis.NewClient(&redis.Options{
 	Addr: "localhost:6379",
 })
 
+func compressToCodec(codec, fileName string, rateFacor int, client *redis.Client) {
+
+	inputPath := "/tmp/compression/input_" + fileName + ".mov"
+	outputPath := "/tmp/compression/output_" + fileName + "_" + codec + ".mp4"
+
+	buf := &bytes.Buffer{}
+	cmd := fluentffmpeg.NewCommand("").
+		// TODO: use PipeInput which accepts io.Reader, instead of InputPath - figure out why it won't accept "bytes.NewReader(videoBytes)""
+		InputPath(inputPath).
+		OutputPath(outputPath).
+		ConstantRateFactor(rateFacor). // 17 - 28 is optimal range: https://trac.ffmpeg.org/wiki/Encode/H.264
+		VideoCodec(codec).             // eg: libx264, libaom-av1, etc..
+		Overwrite(true).
+		OutputLogs(buf). // log results to buffer
+		Build()
+	cmd.Run()
+
+	// Get the output file in bytes
+	dat, err := os.ReadFile(outputPath)
+	if err != nil {
+		fmt.Println("Read error:", err)
+		panic(err)
+	}
+
+	// publish compressed file
+	pubRes := redisClient.Publish(ctx, "x264-compressed", string(dat))
+	if pubRes.Err() != nil {
+		fmt.Println("Publish error:", pubRes.Err().Error())
+		panic(pubRes.Err().Error())
+	}
+
+	out, _ := ioutil.ReadAll(buf) // read logs
+	if len(out) > 0 {
+		fmt.Println(codec+" Logs:", string(out))
+	}
+
+	// Remove tmp files
+	os.Remove(inputPath)
+	// TODO: remove output files
+}
+
 func listenForValidVideo(client *redis.Client) {
 	// Subscribe to "valid-upload"
 	subscriber := client.Subscribe(ctx, "valid-upload")
@@ -38,7 +79,6 @@ func listenForValidVideo(client *redis.Client) {
 	wg := &sync.WaitGroup{}
 	// Continuously listen for valid-upload events
 	for msg = range controlCh {
-		wg.Add(1) // increment wait group counter by one every loop
 		go func() {
 			// Convert string video data to byte array
 			videoBytes := []byte(msg.Payload)
@@ -58,39 +98,11 @@ func listenForValidVideo(client *redis.Client) {
 			}
 			f.Write(videoBytes)
 
-			// use fluentffmpeg to compress file, and write output to an output path
-			outputFilePath := "/tmp/compression/output_" + fileName + ".mp4"
-			buf := &bytes.Buffer{}
-			cmd := fluentffmpeg.NewCommand("").
-				// TODO: use PipeInput which accepts io.Reader, instead of InputPath - figure out why it won't accept "bytes.NewReader(videoBytes)""
-				InputPath(inputFilePath).
-				OutputPath(outputFilePath).
-				ConstantRateFactor(28). // 17 - 28 is optimal range: https://trac.ffmpeg.org/wiki/Encode/H.264
-				VideoCodec("libx264").
-				Overwrite(true).
-				OutputLogs(buf). // log results to buffer
-				Build()
-			cmd.Run()
-
-			// Get the output file in bytes
-			dat, err := os.ReadFile(outputFilePath)
-			if err != nil {
-				fmt.Println("Read error:", err)
-				panic(err)
-			}
-
-			// publish compressed file
-			pubRes := redisClient.Publish(ctx, "x264-compressed", string(dat))
-			if pubRes.Err() != nil {
-				fmt.Println("Publish error:", pubRes.Err().Error())
-				panic(pubRes.Err().Error())
-			}
-
-			out, _ := ioutil.ReadAll(buf) // read logs
-			if len(out) > 0 {
-				fmt.Println("Logs:", string(out))
-			}
-			wg.Done() // decrement counter by one when iteration is complete
+			wg.Add(1) // increment wait group counter by one every loop
+			go func() {
+				compressToCodec("libx264", fileName, 28, redisClient)
+				wg.Done() // decrement counter by one when iteration is complete
+			}()
 		}()
 	}
 	wg.Wait() // blocks until wait group counter is 0
