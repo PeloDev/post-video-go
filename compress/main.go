@@ -45,7 +45,7 @@ func compressToCodec(codec, fileName string, rateFacor int, client *redis.Client
 	}
 
 	// publish compressed file
-	pubRes := redisClient.Publish(ctx, "x264-compressed", string(dat))
+	pubRes := redisClient.Publish(ctx, "compressed-video", string(dat))
 	if pubRes.Err() != nil {
 		fmt.Println("Publish error:", pubRes.Err().Error())
 		panic(pubRes.Err().Error())
@@ -79,9 +79,9 @@ func listenForValidVideo(client *redis.Client) {
 	wg := &sync.WaitGroup{}
 	// Continuously listen for valid-upload events
 	for msg = range controlCh {
-		go func() {
+		go func(nextMsg *redis.Message) {
 			// Convert string video data to byte array
-			videoBytes := []byte(msg.Payload)
+			videoBytes := []byte(nextMsg.Payload)
 
 			// write input video to file system with "unique-ish" name (file-size_timestamp-ms.format)
 			timestamp := time.Now().UnixMilli()
@@ -103,7 +103,7 @@ func listenForValidVideo(client *redis.Client) {
 				compressToCodec("libx264", fileName, 28, redisClient)
 				wg.Done() // decrement counter by one when iteration is complete
 			}()
-		}()
+		}(msg)
 	}
 	wg.Wait() // blocks until wait group counter is 0
 }
